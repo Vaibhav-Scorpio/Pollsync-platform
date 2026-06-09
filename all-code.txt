@@ -1,0 +1,1134 @@
+export interface Option {
+  id: string;
+  text: string;
+  votes: number;
+  imageUrl?: string;
+}
+
+export interface Poll {
+  id: string;
+  title: string;
+  description: string;
+  options: Option[];
+  createdAt: string;
+  durationMinutes: number;
+  expiresAt: string;
+  status: 'active' | 'expired' | 'paused';
+  saveAsTemplate: boolean;
+  category: string;
+  allowMultipleChoices: boolean;
+}
+
+export interface VoteRecord {
+  pollId: string;
+  optionId: string;
+  votedAt: string;
+  fingerprint: string;
+}
+
+export interface PollTemplate {
+  id: string;
+  title: string;
+  description: string;
+  options: string[];
+  durationMinutes: number;
+  category: string;
+}
+
+export interface VoteEvent {
+  pollId: string;
+  optionId: string;
+  votedAt: string;
+  fingerprint: string;
+}
+
+export interface AnalyticsTimeline {
+  timestamp: string;
+  votes: number;
+}
+
+
+
+
+
+
+
+
+import { Poll, Option, VoteRecord, PollTemplate, AnalyticsTimeline } from '../types';
+
+const POLLS_KEY = 'live_polling_polls';
+const VOTES_KEY = 'live_polling_votes';
+const TEMPLATES_KEY = 'live_polling_templates';
+const SYNC_CHANNEL_NAME = 'poll_platform_channel';
+
+const DEFAULT_TEMPLATES: PollTemplate[] = [
+  {
+    id: 't-1',
+    title: 'Favorite Frontend Framework in 2026',
+    description: 'Poll for developer meetups and tech talks regarding modern frameworks.',
+    options: ['React (with Vite/Next)', 'Vue.js (with Nuxt)', 'Svelte (SvelteKit)', 'Solid / Qwik', 'Angular'],
+    durationMinutes: 5,
+    category: 'Technology'
+  },
+  {
+    id: 't-2',
+    title: 'Team Retrospective: Sprint Happiness Check',
+    description: 'Quick check-in on team sentiment and performance during the last sprint.',
+    options: ['Stellar - Everything was smooth!', 'Good - Minimal issues, happy with progress.', 'Average - Some friction, but we managed.', 'Frustrated - Encountered major roadblocks.'],
+    durationMinutes: 3,
+    category: 'Agile Team'
+  },
+  {
+    id: 't-3',
+    title: 'Next Destination for Team Retreat',
+    description: 'Vote on where we should go for our annual company retreat.',
+    options: ['Mountain Cabin Haven 🌲', 'Beachfront Resort Villa 🏖️', 'Vibrant Metro Exploration 🏙️', 'Remote Eco-Lodge in Outer Space 🚀'],
+    durationMinutes: 10,
+    category: 'Company Culture'
+  }
+];
+
+const DEFAULT_POLLS: Poll[] = [
+  {
+    id: 'p-1',
+    title: 'Ultimate AI Assistant Preference',
+    description: 'Which interface or development style do you prefer for coding tasks?',
+    options: [
+      { id: 'opt-a', text: 'Full Agent (Autonomous file edits & terminal executions)', votes: 142, imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=200&q=80' },
+      { id: 'opt-b', text: 'Chat Assistant (Copy-paste code hints & codeblocks)', votes: 89, imageUrl: 'https://images.unsplash.com/photo-1531403009284-440f080d1e12?auto=format&fit=crop&w=200&q=80' },
+      { id: 'opt-c', text: 'Autocomplete Inline (tab-completion only)', votes: 64, imageUrl: 'https://images.unsplash.com/photo-1542831371-29b0f74f9713?auto=format&fit=crop&w=200&q=80' },
+      { id: 'opt-d', text: 'Vanilla Manual Coding (No AI tools whatsoever)', votes: 21, imageUrl: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?auto=format&fit=crop&w=200&q=80' }
+    ],
+    createdAt: new Date(Date.now() - 120000).toISOString(),
+    durationMinutes: 15,
+    expiresAt: new Date(Date.now() + 13 * 60000).toISOString(),
+    status: 'active',
+    saveAsTemplate: true,
+    category: 'Technology',
+    allowMultipleChoices: false
+  }
+];
+
+const SEED_VOTES = (pollId: string, options: Option[]): VoteRecord[] => {
+  const list: VoteRecord[] = [];
+  const baseTime = Date.now() - 120000;
+  options.forEach((opt) => {
+    for (let i = 0; i < opt.votes; i++) {
+      const randomOffset = Math.random() * 120000;
+      list.push({
+        pollId,
+        optionId: opt.id,
+        votedAt: new Date(baseTime + randomOffset).toISOString(),
+        fingerprint: `seed-${Math.random().toString(36).substring(2, 9)}`
+      });
+    }
+  });
+  return list;
+};
+
+export function getDeviceFingerprint(): string {
+  try {
+    const key = [
+      navigator.userAgent,
+      navigator.language,
+      screen.colorDepth,
+      screen.width + 'x' + screen.height,
+      new Date().getTimezoneOffset(),
+      navigator.hardwareConcurrency || 4
+    ].join('###');
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      const char = key.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
+    }
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      canvas.width = 150;
+      canvas.height = 30;
+      ctx.textBaseline = "top";
+      ctx.font = "12px 'Arial'";
+      ctx.fillStyle = "#f60";
+      ctx.fillRect(10, 5, 100, 15);
+      ctx.fillStyle = "#069";
+      ctx.fillText("LivePolling,Fingerprint!", 2, 2);
+      const dataUrl = canvas.toDataURL();
+      let canvasHash = 0;
+      for (let j = 0; j < dataUrl.length; j++) {
+        const char = dataUrl.charCodeAt(j);
+        canvasHash = (canvasHash << 5) - canvasHash + char;
+        canvasHash |= 0;
+      }
+      return `fp_${Math.abs(hash).toString(16)}_${Math.abs(canvasHash).toString(16)}`;
+    }
+    return `fp_${Math.abs(hash).toString(16)}`;
+  } catch (e) {
+    let fallback = localStorage.getItem('poll_voter_fallback_id');
+    if (!fallback) {
+      fallback = 'fb_' + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('poll_voter_fallback_id', fallback);
+    }
+    return fallback;
+  }
+}
+
+let syncChannel: BroadcastChannel | null = null;
+try {
+  syncChannel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+} catch (e) {
+  console.warn("BroadcastChannel not supported.", e);
+}
+
+export function getStoredPolls(): Poll[] {
+  const data = localStorage.getItem(POLLS_KEY);
+  if (!data) {
+    const defaultPolls = DEFAULT_POLLS;
+    localStorage.setItem(POLLS_KEY, JSON.stringify(defaultPolls));
+    const initialVotes = seedInitialVotesForDefaultPolls(defaultPolls);
+    localStorage.setItem(VOTES_KEY, JSON.stringify(initialVotes));
+    return defaultPolls;
+  }
+  return JSON.parse(data);
+}
+
+function seedInitialVotesForDefaultPolls(defaultPolls: Poll[]): VoteRecord[] {
+  let allVotes: VoteRecord[] = [];
+  defaultPolls.forEach(p => {
+    allVotes = allVotes.concat(SEED_VOTES(p.id, p.options));
+  });
+  return allVotes;
+}
+
+export function getStoredVotes(): VoteRecord[] {
+  const data = localStorage.getItem(VOTES_KEY);
+  if (!data) return [];
+  return JSON.parse(data);
+}
+
+export function getStoredTemplates(): PollTemplate[] {
+  const data = localStorage.getItem(TEMPLATES_KEY);
+  if (!data) {
+    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(DEFAULT_TEMPLATES));
+    return DEFAULT_TEMPLATES;
+  }
+  return JSON.parse(data);
+}
+
+export const pollEngine = {
+  getStoredVotes(): VoteRecord[] {
+    return getStoredVotes();
+  },
+
+  getPolls(): Poll[] {
+    const polls = getStoredPolls();
+    let changed = false;
+    const now = new Date();
+    const evaluated = polls.map(poll => {
+      if (poll.status === 'active' && new Date(poll.expiresAt) <= now) {
+        changed = true;
+        return { ...poll, status: 'expired' as const };
+      }
+      return poll;
+    });
+    if (changed) {
+      localStorage.setItem(POLLS_KEY, JSON.stringify(evaluated));
+      this.broadcast({ type: 'POLLS_UPDATED' });
+    }
+    return evaluated;
+  },
+
+  createPoll(data: Omit<Poll, 'id' | 'createdAt' | 'status' | 'options' | 'expiresAt'> & { options: string[], optionImages?: string[] }): Poll {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + data.durationMinutes * 60 * 1000).toISOString();
+    const configuredOptions: Option[] = data.options.map((optText, index) => ({
+      id: `opt-${Math.random().toString(36).substring(2, 9)}`,
+      text: optText,
+      votes: 0,
+      imageUrl: data.optionImages?.[index] || undefined
+    }));
+
+    const newPoll: Poll = {
+      id: `poll-${Math.random().toString(36).substring(2, 11)}`,
+      title: data.title,
+      description: data.description || '',
+      options: configuredOptions,
+      createdAt: now.toISOString(),
+      durationMinutes: data.durationMinutes,
+      expiresAt,
+      status: 'active',
+      saveAsTemplate: data.saveAsTemplate,
+      category: data.category || 'General',
+      allowMultipleChoices: data.allowMultipleChoices
+    };
+
+    const currentPolls = this.getPolls();
+    currentPolls.unshift(newPoll);
+    localStorage.setItem(POLLS_KEY, JSON.stringify(currentPolls));
+
+    if (data.saveAsTemplate) {
+      this.saveTemplate({
+        title: data.title,
+        description: data.description,
+        options: data.options,
+        durationMinutes: data.durationMinutes,
+        category: data.category || 'General'
+      });
+    }
+
+    this.broadcast({ type: 'POLL_CREATED', pollId: newPoll.id });
+    return newPoll;
+  },
+
+  castVote(pollId: string, optionId: string, fingerprint: string): { success: boolean; error?: string } {
+    const polls = this.getPolls();
+    const poll = polls.find(p => p.id === pollId);
+    if (!poll) return { success: false, error: 'Poll not found.' };
+    if (poll.status !== 'active') return { success: false, error: 'Closed.' };
+
+    if (new Date(poll.expiresAt) <= new Date()) {
+      poll.status = 'expired';
+      localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+      this.broadcast({ type: 'POLLS_UPDATED' });
+      return { success: false, error: 'Expired.' };
+    }
+
+    const votes = getStoredVotes();
+    const hasVoted = votes.some(v => v.pollId === pollId && v.fingerprint === fingerprint);
+    if (hasVoted) return { success: false, error: 'Voted already.' };
+
+    const option = poll.options.find(o => o.id === optionId);
+    if (!option) return { success: false, error: 'Invalid choice.' };
+
+    option.votes += 1;
+    const newVote: VoteRecord = {
+      pollId,
+      optionId,
+      votedAt: new Date().toISOString(),
+      fingerprint
+    };
+    votes.push(newVote);
+    localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+    localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+    this.broadcast({ type: 'VOTE_CAST', pollId, optionId, vote: newVote });
+    return { success: true };
+  },
+
+  updatePollStatus(pollId: string, status: 'active' | 'paused' | 'expired'): Poll | null {
+    const polls = this.getPolls();
+    const pollIndex = polls.findIndex(p => p.id === pollId);
+    if (pollIndex === -1) return null;
+    polls[pollIndex].status = status;
+    if (status === 'active') {
+      const now = new Date();
+      polls[pollIndex].expiresAt = new Date(now.getTime() + polls[pollIndex].durationMinutes * 60 * 1000).toISOString();
+      polls[pollIndex].createdAt = now.toISOString();
+    }
+    localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+    this.broadcast({ type: 'POLLS_UPDATED', pollId });
+    return polls[pollIndex];
+  },
+
+  resetPoll(pollId: string): Poll | null {
+    const polls = this.getPolls();
+    const pollIndex = polls.findIndex(p => p.id === pollId);
+    if (pollIndex === -1) return null;
+    polls[pollIndex].options = polls[pollIndex].options.map(opt => ({ ...opt, votes: 0 }));
+    const now = new Date();
+    polls[pollIndex].createdAt = now.toISOString();
+    polls[pollIndex].expiresAt = new Date(now.getTime() + polls[pollIndex].durationMinutes * 60 * 1000).toISOString();
+    polls[pollIndex].status = 'active';
+
+    let votes = getStoredVotes();
+    votes = votes.filter(v => v.pollId !== pollId);
+    localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+    localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+    this.broadcast({ type: 'POLL_RESET', pollId });
+    return polls[pollIndex];
+  },
+
+  deletePoll(pollId: string): boolean {
+    let polls = this.getPolls();
+    if (!polls.some(p => p.id === pollId)) return false;
+    polls = polls.filter(p => p.id !== pollId);
+    localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+
+    let votes = getStoredVotes();
+    votes = votes.filter(v => v.pollId !== pollId);
+    localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+    this.broadcast({ type: 'POLLS_UPDATED' });
+    return true;
+  },
+
+  saveTemplate(data: Omit<PollTemplate, 'id'>): PollTemplate {
+    const templates = getStoredTemplates();
+    const newTemplate: PollTemplate = {
+      id: `t-${Math.random().toString(36).substring(2, 9)}`,
+      title: data.title,
+      description: data.description,
+      options: data.options,
+      durationMinutes: data.durationMinutes,
+      category: data.category
+    };
+    templates.push(newTemplate);
+    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+    return newTemplate;
+  },
+
+  getTemplates(): PollTemplate[] {
+    return getStoredTemplates();
+  },
+
+  deleteTemplate(id: string): boolean {
+    let templates = this.getTemplates();
+    if (!templates.some(t => t.id === id)) return false;
+    templates = templates.filter(t => t.id !== id);
+    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+    return true;
+  },
+
+  getTimelineData(pollId: string): AnalyticsTimeline[] {
+    const votes = getStoredVotes().filter(v => v.pollId === pollId);
+    const poll = this.getPolls().find(p => p.id === pollId);
+    if (!poll || votes.length === 0) return [];
+
+    const sortedVotes = [...votes].sort((a, b) => new Date(a.votedAt).getTime() - new Date(b.votedAt).getTime());
+    const tStart = new Date(poll.createdAt).getTime();
+    const tEnd = Math.min(Date.now(), new Date(poll.expiresAt).getTime());
+    const duration = Math.max(tEnd - tStart, 1000);
+
+    const segments = 8;
+    const step = duration / segments;
+    const timeline: AnalyticsTimeline[] = [];
+
+    for (let i = 1; i <= segments; i++) {
+      const segmentTime = tStart + i * step;
+      const count = sortedVotes.filter(v => new Date(v.votedAt).getTime() <= segmentTime).length;
+      const timeStr = new Date(segmentTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      timeline.push({ timestamp: timeStr, votes: count });
+    }
+    return timeline;
+  },
+
+  broadcast(message: { type: string; pollId?: string; optionId?: string; vote?: VoteRecord }) {
+    if (syncChannel) syncChannel.postMessage(message);
+  },
+
+  subscribe(callback: (msg: any) => void): () => void {
+    if (!syncChannel) return () => {};
+    const handler = (event: MessageEvent) => callback(event.data);
+    syncChannel.addEventListener('message', handler);
+    return () => syncChannel?.removeEventListener('message', handler);
+  },
+
+  simulateVoterActivity(pollId: string, count: number, onNewVoteCast?: (optionId: string) => void) {
+    const polls = this.getPolls();
+    const poll = polls.find(p => p.id === pollId);
+    if (!poll || poll.status !== 'active') return;
+
+    const optIds = poll.options.map(opt => opt.id);
+    const votes = getStoredVotes();
+
+    for (let i = 0; i < count; i++) {
+      let selectedOptionId = optIds[0];
+      const r = Math.random();
+      if (optIds.length > 1) {
+        if (r > 0.4) selectedOptionId = optIds[1];
+        if (r > 0.75 && optIds.length > 2) selectedOptionId = optIds[2];
+        if (r > 0.92 && optIds.length > 3) selectedOptionId = optIds[3];
+      }
+      const opt = poll.options.find(o => o.id === selectedOptionId);
+      if (opt) {
+        opt.votes += 1;
+        votes.push({
+          pollId,
+          optionId: selectedOptionId,
+          votedAt: new Date(Date.now() - Math.random() * 5000).toISOString(),
+          fingerprint: `fp_sim_${Math.random().toString(36).substring(2, 10)}_${Date.now()}_idx_${i}`
+        });
+        if (onNewVoteCast) onNewVoteCast(selectedOptionId);
+      }
+    }
+    localStorage.setItem(POLLS_KEY, JSON.stringify(polls));
+    localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+    this.broadcast({ type: 'POLLS_UPDATED', pollId });
+  }
+};
+
+
+
+
+
+
+
+
+
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { CheckCircle2, Clock, AlertCircle, RefreshCw, AlertTriangle, UserCheck, Check, Info, ArrowLeft, Layers } from 'lucide-react';
+import { Poll } from '../types';
+import { pollEngine, getDeviceFingerprint } from '../state/pollState';
+
+interface VoterScreenProps {
+  polls: Poll[];
+  selectedPollId: string | null;
+  onSelectPoll: (id: string | null) => void;
+  addToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+}
+
+export default function VoterScreen({ polls, selectedPollId, onSelectPoll, addToast }: VoterScreenProps) {
+  const [fingerprint, setFingerprint] = useState<string>('');
+  const [selectedOptionId, setSelectedOptionId] = useState<string>('');
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [hasVoted, setHasVoted] = useState<boolean>(false);
+  const [votedOptionId, setVotedOptionId] = useState<string | null>(null);
+  const [votedOptionIds, setVotedOptionIds] = useState<string[]>([]);
+  const [timeRemainingSecs, setTimeRemainingSecs] = useState<number>(0);
+
+  const currentPoll = polls.find(p => p.id === selectedPollId);
+
+  useEffect(() => {
+    const fp = getDeviceFingerprint();
+    setFingerprint(fp);
+
+    if (selectedPollId) {
+      const votes = pollEngine.getStoredVotes();
+      const pastVote = votes.find(v => v.pollId === selectedPollId && v.fingerprint === fp);
+      if (pastVote) {
+        setHasVoted(true);
+        setVotedOptionId(pastVote.optionId);
+      } else {
+        setHasVoted(false);
+        setVotedOptionId(null);
+      }
+    }
+  }, [selectedPollId, polls]);
+
+  useEffect(() => {
+    if (!currentPoll || currentPoll.status !== 'active') {
+      setTimeRemainingSecs(0);
+      return;
+    }
+    const calcTime = () => {
+      const msLeft = new Date(currentPoll.expiresAt).getTime() - Date.now();
+      const secs = Math.max(0, Math.round(msLeft / 1000));
+      setTimeRemainingSecs(secs);
+      if (secs <= 0 && currentPoll.status === 'active') {
+        pollEngine.getPolls();
+      }
+    };
+    calcTime();
+    const interval = setInterval(calcTime, 1000);
+    return () => clearInterval(interval);
+  }, [currentPoll]);
+
+  useEffect(() => {
+    const unsub = pollEngine.subscribe((msg) => {
+      if (msg.pollId === selectedPollId) {
+        if (msg.type === 'POLL_RESET') {
+          setHasVoted(false);
+          setVotedOptionId(null);
+          setVotedOptionIds([]);
+          setSelectedOptionId('');
+          setSelectedOptionIds([]);
+          addToast('This poll was reset.', 'info');
+        } else if (msg.type === 'POLLS_UPDATED') {
+          const fp = getDeviceFingerprint();
+          const votes = pollEngine.getStoredVotes();
+          const pVote = votes.find(v => v.pollId === selectedPollId && v.fingerprint === fp);
+          if (pVote) {
+            setHasVoted(true);
+            setVotedOptionId(pVote.optionId);
+          } else if (!pVote && hasVoted) {
+            setHasVoted(false);
+            setVotedOptionId(null);
+          }
+        }
+      }
+    });
+    return () => unsub();
+  }, [selectedPollId, hasVoted]);
+
+  const handleVoteSubmission = () => {
+    if (!currentPoll) return;
+    if (currentPoll.status !== 'active' || timeRemainingSecs <= 0) return addToast('Voting closed.', 'error');
+    if (hasVoted) return addToast('One vote allowed per device.', 'warning');
+
+    if (currentPoll.allowMultipleChoices) {
+      if (selectedOptionIds.length === 0) return addToast('Select at least one option.', 'error');
+      selectedOptionIds.forEach((optId, idx) => {
+        const voterFp = idx === 0 ? fingerprint : `${fingerprint}_multi_${idx}`;
+        pollEngine.castVote(currentPoll.id, optId, voterFp);
+      });
+      setHasVoted(true);
+      setVotedOptionIds(selectedOptionIds);
+      addToast('Vote registered!', 'success');
+    } else {
+      if (!selectedOptionId) return addToast('Select an option first.', 'error');
+      const res = pollEngine.castVote(currentPoll.id, selectedOptionId, fingerprint);
+      if (res.success) {
+        setHasVoted(true);
+        setVotedOptionId(selectedOptionId);
+        addToast('Vote successfully cast!', 'success');
+      } else {
+        addToast(res.error || 'Failed.', 'error');
+      }
+    }
+  };
+
+  const toggleMultiChoiceSelect = (optId: string) => {
+    if (selectedOptionIds.includes(optId)) {
+      setSelectedOptionIds(selectedOptionIds.filter(id => id !== optId));
+    } else {
+      setSelectedOptionIds([...selectedOptionIds, optId]);
+    }
+  };
+
+  const formatSecs = (totalSecs: number) => {
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  if (!selectedPollId || !currentPoll) {
+    return (
+      <div className="max-w-md mx-auto flex flex-col gap-6 pt-2">
+        <div className="text-center">
+          <h2 className="font-sans font-bold text-2xl text-stone-100 tracking-tight">Handheld Join Screen</h2>
+          <p className="text-stone-400 text-xs mt-1">Tap a live broadcast feed to place your fingerprint-restricted vote.</p>
+        </div>
+
+        <div className="space-y-3">
+          {polls.length === 0 ? (
+            <div className="p-8 text-center bg-stone-900/30 border border-stone-800 border-dashed rounded-xl flex flex-col items-center gap-2">
+              <AlertTriangle className="w-8 h-8 text-stone-605" />
+              <span className="text-stone-400 font-bold text-sm">No live feeds.</span>
+              <p className="text-[10px] text-stone-500">Go to the Creator Panel inside your application to launch your first poll!</p>
+            </div>
+          ) : (
+            polls.map(poll => (
+              <div key={poll.id} onClick={() => onSelectPoll(poll.id)} className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${poll.status === 'active' ? 'bg-stone-900 border-stone-800 hover:border-indigo-500' : 'bg-stone-950/40 border-stone-950 opacity-60'}`}>
+                <span className="text-[9px] font-mono font-bold text-indigo-400 block mb-1">{poll.category}</span>
+                <h3 className="font-sans font-bold text-sm text-stone-100">{poll.title}</h3>
+                <p className="text-xs text-stone-400 line-clamp-1 mt-1 leading-relaxed">{poll.description || 'No subtext.'}</p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const totalVotesOnCurrent = currentPoll.options.reduce((sum, o) => sum + o.votes, 0);
+
+  return (
+    <div className="max-w-md mx-auto flex flex-col gap-4 pt-1 pb-10">
+      <button onClick={() => onSelectPoll(null)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-stone-900 border border-stone-850 text-xs text-stone-400 hover:text-stone-200 cursor-pointer self-start">
+        <ArrowLeft className="w-3.5 h-3.5" /> Direct Broadcasts
+      </button>
+
+      <div className="bg-stone-900/40 border border-stone-800 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+        <div className="flex justify-between items-center border-b border-stone-800 pb-3">
+          <div>
+            <span className="text-[9px] font-mono font-bold text-indigo-400 block">{currentPoll.category}</span>
+            <span className="text-[9px] text-stone-500 font-mono">ID: {currentPoll.id.replace('poll-', '')}</span>
+          </div>
+          {currentPoll.status === 'active' && timeRemainingSecs > 0 ? (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-950/50 border border-indigo-900 text-indigo-400 font-mono text-xs font-bold">
+              <Clock className="w-3.5 h-3.5" /> <span>{formatSecs(timeRemainingSecs)}</span>
+            </div>
+          ) : (
+            <span className="text-[9px] font-mono bg-stone-800 text-stone-400 px-2 py-0.5 rounded">Closed</span>
+          )}
+        </div>
+
+        <div>
+          <h2 className="font-sans font-black text-lg text-stone-50 leading-snug">{currentPoll.title}</h2>
+          {currentPoll.description && <p className="text-stone-400 text-xs mt-2 bg-stone-950/25 p-2.5 rounded-lg line-clamp-3 font-medium">{currentPoll.description}</p>}
+        </div>
+
+        <AnimatePresence mode="wait">
+          {hasVoted ? (
+            <motion.div key="voted-results" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3.5 pt-2">
+              <div className="p-3 bg-emerald-950/20 border border-emerald-900/50 text-emerald-400 text-xs rounded-xl font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> Registered Successfully via Device Context Hash.
+              </div>
+              <div className="space-y-3">
+                {currentPoll.options.map(opt => {
+                  const percent = totalVotesOnCurrent > 0 ? Math.round((opt.votes / totalVotesOnCurrent) * 100) : 0;
+                  const isChecked = currentPoll.allowMultipleChoices ? votedOptionIds.includes(opt.id) : votedOptionId === opt.id;
+                  return (
+                    <div key={opt.id} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className={`font-semibold ${isChecked ? 'text-indigo-400 font-extrabold' : 'text-stone-300'}`}>{opt.text}</span>
+                        <span className="font-mono font-bold text-stone-400">{percent}% ({opt.votes})</span>
+                      </div>
+                      <div className="h-2 w-full bg-stone-950 rounded-xl overflow-hidden">
+                        <div className={`h-full ${isChecked ? 'bg-indigo-500' : 'bg-stone-800'}`} style={{ width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="choices" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+              {currentPoll.status === 'paused' ? (
+                <div className="p-6 text-center bg-stone-950/40 rounded-xl flex flex-col items-center gap-2">
+                  <AlertCircle className="w-6 h-6 text-amber-500 animate-pulse" />
+                  <span className="text-xs font-bold text-stone-300">Poll Paused by Presenter</span>
+                </div>
+              ) : (
+                <>
+                  {currentPoll.allowMultipleChoices && (
+                    <div className="p-2 py-1 bg-indigo-950/20 text-indigo-400 text-[10px] rounded flex items-center gap-1.5"><Layers className="w-3 h-3" /> Select multiple path choices!</div>
+                  )}
+                  <div className="space-y-2">
+                    {currentPoll.options.map(option => {
+                      const isSelected = currentPoll.allowMultipleChoices ? selectedOptionIds.includes(option.id) : selectedOptionId === option.id;
+                      return (
+                        <button key={option.id} onClick={() => currentPoll.allowMultipleChoices ? toggleMultiChoiceSelect(option.id) : setSelectedOptionId(option.id)} className={`w-full text-left p-3.5 rounded-xl border text-xs font-medium flex items-center justify-between gap-3 ${isSelected ? 'bg-indigo-950/20 border-indigo-500 text-stone-105' : 'bg-stone-950/60 border-stone-800 text-stone-400'}`}>
+                          <div className="flex items-center gap-2">
+                            {option.imageUrl && <img src={option.imageUrl} alt="" referrerPolicy="no-referrer" className="w-8 h-8 object-cover rounded bg-stone-900 border" />}
+                            <span>{option.text}</span>
+                          </div>
+                          <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center ${isSelected ? 'bg-indigo-500 text-stone-950' : 'text-transparent'}`}><Check className="w-3 h-3 stroke-[3]" /></div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={handleVoteSubmission} className="w-full bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 text-stone-950 py-3 rounded-xl font-bold font-sans text-sm tracking-wide cursor-pointer flex items-center justify-center gap-1.5 mt-2 shadow-lg shadow-emerald-700/5">
+                    <UserCheck className="w-4 h-4" /> Cast Handheld Vote Safely
+                  </button>
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Maximize, Minimize, Users, Clock, Sparkles, HelpCircle, ArrowLeft, Bot, Zap } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import confetti from 'canvas-confetti';
+import { Poll, Option } from '../types';
+import { pollEngine } from '../state/pollState';
+
+interface PresenterScreenProps {
+  polls: Poll[];
+  selectedPollId: string | null;
+  onSelectPoll: (id: string | null) => void;
+  onRefreshPolls: () => void;
+  addToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+}
+
+export default function PresenterScreen({ polls, selectedPollId, onSelectPoll, onRefreshPolls, addToast }: PresenterScreenProps) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [timeRemainingSecs, setTimeRemainingSecs] = useState<number>(0);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const simulationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const confettiFiredRef = useRef<boolean>(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const currentPoll = polls.find(p => p.id === selectedPollId);
+
+  useEffect(() => {
+    const unsub = pollEngine.subscribe((msg) => {
+      if (msg.pollId === selectedPollId) {
+        onRefreshPolls();
+      }
+    });
+    return () => unsub();
+  }, [selectedPollId]);
+
+  useEffect(() => {
+    if (!currentPoll || currentPoll.status !== 'active') {
+      setTimeRemainingSecs(0);
+      return;
+    }
+    const updateTimer = () => {
+      const msLeft = new Date(currentPoll.expiresAt).getTime() - Date.now();
+      const secs = Math.max(0, Math.round(msLeft / 1000));
+      setTimeRemainingSecs(secs);
+
+      if (secs <= 0 && currentPoll.status === 'active') {
+        const totalVotes = currentPoll.options.reduce((s, o) => s + o.votes, 0);
+        pollEngine.updatePollStatus(currentPoll.id, 'expired');
+        onRefreshPolls();
+        if (totalVotes > 0 && !confettiFiredRef.current) {
+          triggerCongratulationsExplosion();
+          confettiFiredRef.current = true;
+          addToast('Completed! Confetti vitória.', 'success');
+        }
+      }
+    };
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [currentPoll, onRefreshPolls]);
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(err => addToast('Err: ' + err.message, 'error'));
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  };
+
+  const triggerCongratulationsExplosion = () => {
+    const duration = 2 * 1000;
+    const animationEnd = Date.now() + duration;
+    const defaults = { startVelocity: 25, spread: 360, ticks: 50, zIndex: 1000 };
+    const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
+
+    const interval: any = setInterval(() => {
+      const timeLeft = animationEnd - Date.now();
+      if (timeLeft <= 0) return clearInterval(interval);
+      const particleCount = 45 * (timeLeft / duration);
+      confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 } });
+      confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 } });
+    }, 200);
+  };
+
+  const handleBotSimulationToggle = () => {
+    if (isSimulating) {
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+      simulationIntervalRef.current = null;
+      setIsSimulating(false);
+      addToast('Traffic simulation stopped.', 'info');
+    } else {
+      if (!currentPoll || currentPoll.status !== 'active') return addToast('Choose active poll!', 'warning');
+      setIsSimulating(true);
+      addToast('Simulating high concurrent votes...', 'success');
+      simulationIntervalRef.current = setInterval(() => {
+        const count = Math.floor(Math.random() * 3) + 2;
+        pollEngine.simulateVoterActivity(currentPoll.id, count);
+        onRefreshPolls();
+      }, 150);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+    };
+  }, []);
+
+  const getLeadingOptions = (options: Option[]): Option[] => {
+    const maxVotes = Math.max(...options.map(o => o.votes));
+    if (maxVotes === 0) return [];
+    return options.filter(o => o.votes === maxVotes);
+  };
+
+  const formatSecs = (totalSecs: number) => {
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  if (!selectedPollId || !currentPoll) {
+    return (
+      <div className="max-w-md mx-auto text-center pt-8 flex flex-col gap-5">
+        <div className="p-8 text-center bg-stone-900/30 border border-stone-800 border-dashed rounded-2xl flex flex-col items-center gap-2">
+          <HelpCircle className="w-10 h-10 text-stone-650 animate-pulse" />
+          <h2 className="text-stone-300 font-bold font-sans">Presenter Stage Launcher</h2>
+          <p className="text-xs text-stone-500">Pick any active poll below to mount on the conference projection banner screens.</p>
+        </div>
+        <div className="space-y-3 text-left">
+          {polls.map(p => (
+            <button key={p.id} onClick={() => onSelectPoll(p.id)} className="w-full p-4 rounded-xl bg-stone-900 border border-stone-800 hover:border-indigo-500 text-xs font-sans text-stone-300 flex justify-between items-center transition-all cursor-pointer">
+              <span>{p.title}</span> <span className="text-indigo-400 font-bold shrink-0">Mount Stage →</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const totalVotesCount = currentPoll.options.reduce((sum, o) => sum + o.votes, 0);
+  const leadingOptions = getLeadingOptions(currentPoll.options);
+  const joinUrl = `${window.location.origin}/?poll=${currentPoll.id}`;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between gap-4">
+        <button onClick={() => onSelectPoll(null)} className="flex items-center gap-1 bg-stone-900 border border-stone-800 px-3 py-1.5 rounded-xl text-xs text-stone-400 hover:text-stone-200 transition-all cursor-pointer">
+          <ArrowLeft className="w-3.5 h-3.5" /> Close Presenter Screen
+        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleBotSimulationToggle} className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold border transition-colors cursor-pointer flex items-center gap-1 ${isSimulating ? 'bg-rose-950/20 text-rose-400 border-rose-900/50 animate-pulse' : 'bg-stone-900 border-stone-800 text-stone-400'}`}>
+            <Bot className="w-3.5 h-3.5" /> {isSimulating ? 'SIMULATOR ON' : 'Bot Simulator'}
+          </button>
+          <button onClick={toggleFullscreen} className="bg-indigo-950/20 border border-indigo-900/40 text-[11px] text-indigo-300 rounded-xl px-3 py-1.5 flex items-center gap-1 font-bold cursor-pointer">
+            {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />} Present Fullscreen
+          </button>
+        </div>
+      </div>
+
+      <div ref={containerRef} className={`bg-stone-950 border border-stone-900 rounded-2xl p-6 sm:p-10 flex flex-col justify-between relative overflow-hidden shadow-2xl ${isFullscreen ? 'w-screen h-screen rounded-none fixed inset-0 z-50' : 'min-h-[500px]'}`}>
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-500/5 blur-[100px] rounded-full pointer-events-none" />
+
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-stone-900 pb-4 z-10">
+          <div>
+            <span className="text-[10px] font-mono font-bold text-indigo-400 tracking-widest flex items-center gap-1"><Zap className="w-4 h-4 animate-bounce" /> AUDIENCE INTERACTION BLOCK</span>
+            <h1 className="text-xl sm:text-2xl font-sans font-black text-stone-100">{currentPoll.title}</h1>
+          </div>
+          <div className="flex items-center gap-2 font-mono text-sm shrink-0">
+            <div className="bg-stone-900 border px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-stone-300">
+              <Users className="w-4 h-4 text-emerald-400" /> <span className="font-bold text-stone-100">{totalVotesCount}</span> votes
+            </div>
+            {currentPoll.status === 'active' && timeRemainingSecs > 0 ? (
+              <div className="bg-indigo-950/20 border border-indigo-900 px-3 py-1.5 rounded-xl font-bold text-indigo-400 flex items-center gap-1.5"><Clock className="w-4 h-4" /> {formatSecs(timeRemainingSecs)}</div>
+            ) : (
+              <span className="bg-stone-900 text-stone-500 px-3 py-1.5 rounded-xl text-xs uppercase font-extrabold">Closed</span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center flex-1 z-10">
+          <div className="lg:col-span-8 flex items-end justify-around h-[300px] pb-4 px-2 select-none relative">
+            <div className="absolute left-0 right-0 top-1/4 border-b border-stone-900/40" />
+            <div className="absolute left-0 right-0 top-2/4 border-b border-stone-900/40" />
+            <div className="absolute left-0 right-0 top-3/4 border-b border-stone-900/40" />
+
+            {totalVotesCount === 0 ? (
+              <div className="w-full h-full flex flex-col items-center justify-center p-8 text-stone-500 mt-10">
+                <Users className="w-10 h-10 mb-3 animate-pulse text-stone-700" />
+                <span className="font-sans font-bold text-stone-300 text-sm">Join using handheld mobile to update the dashboard.</span>
+              </div>
+            ) : (
+              currentPoll.options.map((opt) => {
+                const percent = totalVotesCount > 0 ? Math.round((opt.votes / totalVotesCount) * 100) : 0;
+                const isLeader = leadingOptions.some(lo => lo.id === opt.id);
+                return (
+                  <div key={opt.id} className="flex flex-col items-center justify-end h-full w-[22%] text-center">
+                    <span className={`font-mono text-sm font-black ${isLeader ? 'text-purple-400' : 'text-stone-400'}`}>{percent}%</span>
+                    <span className="text-[10px] font-mono text-stone-550">({opt.votes})</span>
+                    <div className="w-full flex-1 max-h-[180px] flex items-end justify-center mt-2">
+                      <motion.div animate={{ height: `${Math.max(8, percent)}%` }} transition={{ type: 'spring', damping: 15 }} className={`w-12 rounded-t-xl bg-gradient-to-t ${isLeader ? 'from-indigo-500 to-purple-500' : 'from-stone-800 to-stone-750'} shadow relative overflow-hidden`} />
+                    </div>
+                    <p className={`text-[10px] sm:text-xs leading-snug line-clamp-1 mt-2 ${isLeader ? 'font-bold text-stone-105' : 'text-stone-400'}`}>{opt.text}</p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="lg:col-span-4 bg-stone-900/60 border border-stone-800 rounded-2xl p-4 flex flex-col items-center justify-center gap-3">
+            <span className="font-mono text-[9px] bg-stone-950 text-indigo-400 px-2 py-0.5 rounded font-black">INTERACTIVE BRIDGE</span>
+            <div className="p-2 bg-white rounded-lg shadow-sm">
+              <QRCodeSVG value={joinUrl} size={128} />
+            </div>
+            <p className="text-[10px] text-stone-400 text-center">Scan camera QR or share manually:</p>
+            <span className="bg-stone-950 p-2 font-mono text-[9px] select-all truncate w-full text-center border text-stone-500 rounded">{joinUrl}</span>
+          </div>
+        </div>
+
+        <div className="flex border-t border-stone-901 pt-4 text-[10px] font-mono text-stone-500 justify-between items-center">
+          <span>{leadingOptions.length > 0 ? `Current Winner: ${leadingOptions.map(l => l.text).join(' & ')}` : 'Waiting on feedback...'}</span>
+          <span className="text-emerald-450 uppercase font-bold flex items-center gap-1">● sync ping active</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import Header from './components/Header';
+import PollCreation from './components/PollCreation';
+import VoterScreen from './components/VoterScreen';
+import PresenterScreen from './components/PresenterScreen';
+import AnalyticsScreen from './components/AnalyticsScreen';
+import Notification, { Toast } from './components/Notification';
+import { Poll, PollTemplate } from './types';
+import { pollEngine } from './state/pollState';
+import { Radio } from 'lucide-react';
+
+export default function App() {
+  const [activeView, setActiveView] = useState<'creator' | 'voter' | 'presenter' | 'analytics'>('creator');
+  const [selectedPollId, setSelectedPollId] = useState<string | null>(null);
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const [templates, setTemplates] = useState<PollTemplate[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const playPingSound = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.3);
+    } catch (e) {}
+  };
+
+  const addToast = (message: string, type: Toast['type']) => {
+    const newToast: Toast = {
+      id: `toast-${Math.random().toString(36).substring(2, 9)}`,
+      message,
+      type
+    };
+    setToasts((prev) => [...prev, newToast]);
+    setTimeout(() => removeToast(newToast.id), 4000);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const loadData = () => {
+    setPolls(pollEngine.getPolls());
+    setTemplates(pollEngine.getTemplates());
+  };
+
+  useEffect(() => {
+    loadData();
+    const params = new URLSearchParams(window.location.search);
+    const pollQuery = params.get('poll');
+    if (pollQuery) {
+      const targetExists = pollEngine.getPolls().some(p => p.id === pollQuery);
+      if (targetExists) {
+        setSelectedPollId(pollQuery);
+        setActiveView('voter');
+        addToast('Voter context matching URL hash. Ready!', 'success');
+      } else {
+        addToast('Broadcast link not found in local browser storage.', 'warning');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = pollEngine.subscribe((msg) => {
+      loadData();
+      if (msg.type === 'VOTE_CAST' && msg.pollId === selectedPollId) {
+        playPingSound();
+      }
+    });
+    return () => unsubscribe();
+  }, [selectedPollId]);
+
+  const handlePollCreated = (newPoll: Poll) => {
+    loadData();
+    setSelectedPollId(newPoll.id);
+  };
+
+  const totalVotesAcrossAll = polls.reduce(
+    (sum, p) => sum + p.options.reduce((oSum, o) => oSum + o.votes, 0), 
+    0
+  );
+
+  return (
+    <div className="min-h-screen bg-stone-955 text-stone-100 flex flex-col font-sans transition-all selection:bg-indigo-550 selection:text-indigo-200">
+      <Notification toasts={toasts} removeToast={removeToast} />
+      
+      <Header 
+        activeView={activeView}
+        setView={(view) => {
+          setActiveView(view);
+          if (view === 'creator' && window.location.search) {
+            window.history.pushState({}, '', window.location.pathname);
+          }
+        }}
+        pollsCount={polls.length}
+        totalVotesCount={totalVotesAcrossAll}
+      />
+
+      <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-5">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeView}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.2 }}
+            className="flex-grow"
+          >
+            {activeView === 'creator' && (
+              <PollCreation
+                polls={polls}
+                templates={templates}
+                onPollCreated={handlePollCreated}
+                onRefreshPolls={loadData}
+                onSelectPollForPresenter={(id) => { setSelectedPollId(id); setActiveView('presenter'); }}
+                onSelectPollForVoter={(id) => { setSelectedPollId(id); setActiveView('voter'); }}
+                addToast={addToast}
+              />
+            )}
+
+            {activeView === 'voter' && (
+              <VoterScreen
+                polls={polls}
+                selectedPollId={selectedPollId}
+                onSelectPoll={(id) => setSelectedPollId(id)}
+                addToast={addToast}
+              />
+            )}
+
+            {activeView === 'presenter' && (
+              <PresenterScreen
+                polls={polls}
+                selectedPollId={selectedPollId}
+                onSelectPoll={(id) => setSelectedPollId(id)}
+                onRefreshPolls={loadData}
+                addToast={addToast}
+              />
+            )}
+
+            {activeView === 'analytics' && (
+              <AnalyticsScreen
+                polls={polls}
+                templates={templates}
+                onRefreshPolls={loadData}
+                onRefreshTemplates={loadData}
+                addToast={addToast}
+              />
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      <footer className="border-t border-stone-900 bg-stone-955 py-5 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between font-mono text-[10px] text-stone-600">
+          <div className="flex items-center gap-1.5">
+            <Radio className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+            <span>PollSync Live Platform Engine</span>
+          </div>
+          <span>Client-Side Broadcast System ready</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+
+
+
